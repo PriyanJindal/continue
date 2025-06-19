@@ -31,7 +31,14 @@ const esbuildConfig = {
         build.onEnd((result) => {
           if (result.errors.length > 0) {
             console.error("Build failed with errors:", result.errors);
-            throw new Error(result.errors);
+            const errorMessages = result.errors
+              .map((err) => {
+                return `${err.location ? `${err.location.file}:${err.location.line}:${err.location.column}: ` : ""}${err.text}`;
+              })
+              .join("\n");
+            throw new Error(
+              `Build failed with ${result.errors.length} error(s):\n${errorMessages}`,
+            );
           } else {
             try {
               fs.writeFileSync(

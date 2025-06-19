@@ -2,6 +2,9 @@ import { fetchwithRequestOptions } from "@continuedev/fetch";
 import * as URI from "uri-js";
 import { v4 as uuidv4 } from "uuid";
 
+// Initialize OpenInference instrumentation early
+import "./instrumentation.js";
+
 import { CompletionProvider } from "./autocomplete/CompletionProvider";
 import {
   openedFilesLruCache,

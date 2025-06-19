@@ -1,5 +1,8 @@
 import * as path from "path";
 
+// Initialize OpenInference instrumentation early
+import "../instrumentation";
+
 import { getContinueRcPath, getTsConfigPath } from "core/util/paths";
 import { Telemetry } from "core/util/posthog";
 import * as vscode from "vscode";

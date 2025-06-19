@@ -5,6 +5,7 @@ import { usesFreeTrialApiKey } from "../config/usesFreeTrialApiKey";
 import { FromCoreProtocol, ToCoreProtocol } from "../protocol";
 import { IMessenger, Message } from "../protocol/messenger";
 import { Telemetry } from "../util/posthog";
+import { traceMessageStream } from "../util/tracing.js";
 import { TTS } from "../util/tts";
 
 export async function* llmStreamChat(
@@ -107,22 +108,28 @@ export async function* llmStreamChat(
 
     return next.value;
   } else {
-    const gen = model.streamChat(
+    // Use tracing for the main chat stream
+    const tracedGenerator = traceMessageStream(
+      model.model,
       messages,
-      abortController.signal,
-      completionOptions,
+      () => model.streamChat(
+        messages,
+        abortController.signal,
+        completionOptions,
+      )
     );
-    let next = await gen.next();
+
+    let next = await tracedGenerator.next();
     while (!next.done) {
       if (abortController.signal.aborted) {
-        next = await gen.return(errorPromptLog);
+        next = await tracedGenerator.return(errorPromptLog);
         break;
       }
 
       const chunk = next.value;
 
       yield chunk;
-      next = await gen.next();
+      next = await tracedGenerator.next();
     }
     if (config.experimental?.readResponseTTS && "completion" in next.value) {
       void TTS.read(next.value?.completion);

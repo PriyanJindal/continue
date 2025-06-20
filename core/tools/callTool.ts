@@ -1,4 +1,4 @@
-import { ContextItem, Tool, ToolExtras } from "..";
+import { ContextItem, Tool, ToolCall, ToolExtras } from "..";
 import { MCPManagerSingleton } from "../context/mcp/MCPManagerSingleton";
 import { canParseUrl } from "../util/url";
 import { BuiltInToolNames } from "./builtIn";
@@ -9,6 +9,7 @@ import {
 } from "../instrumentation/toolInstrumentation";
 import { createNewFileImpl } from "./implementations/createNewFile";
 import { createRuleBlockImpl } from "./implementations/createRuleBlock";
+import { fetchUrlContentImpl } from "./implementations/fetchUrlContent";
 import { fileGlobSearchImpl } from "./implementations/globSearch";
 import { grepSearchImpl } from "./implementations/grepSearch";
 import { lsToolImpl } from "./implementations/lsTool";
@@ -18,6 +19,7 @@ import { requestRuleImpl } from "./implementations/requestRule";
 import { runTerminalCommandImpl } from "./implementations/runTerminalCommand";
 import { searchWebImpl } from "./implementations/searchWeb";
 import { viewDiffImpl } from "./implementations/viewDiff";
+import { safeParseToolCallArgs } from "./parseArgs";
 
 async function callHttpTool(
   url: string,
@@ -154,6 +156,8 @@ async function callBuiltInTool(
       return await runTerminalCommandImpl(args, extras);
     case BuiltInToolNames.SearchWeb:
       return await searchWebImpl(args, extras);
+    case BuiltInToolNames.FetchUrlContent:
+      return await fetchUrlContentImpl(args, extras);
     case BuiltInToolNames.ViewDiff:
       return await viewDiffImpl(args, extras);
     case BuiltInToolNames.LSTool:
@@ -174,63 +178,76 @@ async function callBuiltInTool(
 // Note: Edit tool is handled on client
 export async function callTool(
   tool: Tool,
-  callArgs: string,
+  toolCall: ToolCall,
   extras: ToolExtras,
 ): Promise<{
   contextItems: ContextItem[];
   errorMessage: string | undefined;
 }> {
-  const args = JSON.parse(callArgs || "{}");
+  try {
+    const args = safeParseToolCallArgs(toolCall);
 
-  if (tool.uri) {
-    const parsedUri = new URL(tool.uri);
-    if (parsedUri.protocol === "mcp:") {
-      const decoded = decodeMCPToolUri(tool.uri);
-      if (decoded) {
-        const [mcpId, toolName] = decoded;
-        return instrumentMCPToolCall(mcpId, toolName, args, async () => {
-          const contextItems = await callToolFromUri(tool.uri!, args, extras);
-          if (tool.faviconUrl) {
-            contextItems.forEach((item) => {
-              item.icon = tool.faviconUrl;
-            });
-          }
-          return {
-            contextItems,
-            errorMessage: undefined,
-          };
-        });
+    if (tool.uri) {
+      const parsedUri = new URL(tool.uri);
+      if (parsedUri.protocol === "mcp:") {
+        const decoded = decodeMCPToolUri(tool.uri);
+        if (decoded) {
+          const [mcpId, toolName] = decoded;
+          return instrumentMCPToolCall(mcpId, toolName, args, async () => {
+            const contextItems = await callToolFromUri(tool.uri!, args, extras);
+            if (tool.faviconUrl) {
+              contextItems.forEach((item) => {
+                item.icon = tool.faviconUrl;
+              });
+            }
+            return {
+              contextItems,
+              errorMessage: undefined,
+            };
+          });
+        }
       }
+      // Handle other URI types with instrumentation
+      return instrumentToolCall(tool.function.name, args, async () => {
+        const contextItems = await callToolFromUri(tool.uri!, args, extras);
+        if (tool.faviconUrl) {
+          contextItems.forEach((item) => {
+            item.icon = tool.faviconUrl;
+          });
+        }
+        return {
+          contextItems,
+          errorMessage: undefined,
+        };
+      });
+    } else {
+      return instrumentToolCall(tool.function.name, args, async () => {
+        const contextItems = await callBuiltInTool(
+          tool.function.name,
+          args,
+          extras,
+        );
+        if (tool.faviconUrl) {
+          contextItems.forEach((item) => {
+            item.icon = tool.faviconUrl;
+          });
+        }
+        return {
+          contextItems,
+          errorMessage: undefined,
+        };
+      });
     }
-    // Handle other URI types without instrumentation for now
-    return instrumentToolCall(tool.function.name, args, async () => {
-      const contextItems = await callToolFromUri(tool.uri!, args, extras);
-      if (tool.faviconUrl) {
-        contextItems.forEach((item) => {
-          item.icon = tool.faviconUrl;
-        });
-      }
-      return {
-        contextItems,
-        errorMessage: undefined,
-      };
-    });
-  } else {
-    return instrumentToolCall(tool.function.name, args, async () => {
-      const contextItems = await callBuiltInTool(
-        tool.function.name,
-        args,
-        extras,
-      );
-      if (tool.faviconUrl) {
-        contextItems.forEach((item) => {
-          item.icon = tool.faviconUrl;
-        });
-      }
-      return {
-        contextItems,
-        errorMessage: undefined,
-      };
-    });
+  } catch (error) {
+    return {
+      contextItems: [
+        {
+          name: "Tool Error",
+          description: `Error calling tool ${tool.function?.name || "unknown"}`,
+          content: `Error: ${error instanceof Error ? error.message : String(error)}`,
+        },
+      ],
+      errorMessage: error instanceof Error ? error.message : String(error),
+    };
   }
 }

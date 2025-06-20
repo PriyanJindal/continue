@@ -4,6 +4,7 @@ import {
   PromptTemplates,
 } from "@continuedev/config-yaml";
 import Parser from "web-tree-sitter";
+import { CodebaseIndexer } from "./indexing/CodebaseIndexer";
 import { LLMConfigurationStatuses } from "./llm/constants";
 
 declare global {
@@ -93,6 +94,8 @@ export interface ILLM
     Required<Pick<LLMOptions, RequiredLLMOptions>> {
   get providerName(): string;
   get underlyingProviderName(): string;
+
+  autocompleteOptions?: Partial<TabAutocompleteOptions>;
 
   complete(
     prompt: string,
@@ -563,6 +566,7 @@ export interface LLMOptions {
   uniqueId?: string;
   baseAgentSystemMessage?: string;
   baseChatSystemMessage?: string;
+  autocompleteOptions?: Partial<TabAutocompleteOptions>;
   contextLength?: number;
   maxStopWords?: number;
   completionOptions?: CompletionOptions;
@@ -829,6 +833,7 @@ export interface ContinueSDK {
   config: ContinueConfig;
   fetch: FetchFunction;
   completionOptions?: LLMFullCompletionOptions;
+  abortController: AbortController;
 }
 
 export interface SlashCommand {
@@ -969,6 +974,7 @@ export interface ToolExtras {
     contextItems: ContextItem[];
   }) => void;
   config: ContinueConfig;
+  codeBaseIndexer?: CodebaseIndexer;
 }
 
 export interface Tool {
@@ -989,6 +995,7 @@ export interface Tool {
   uri?: string;
   faviconUrl?: string;
   group: string;
+  originalFunctionName?: string;
 }
 
 interface ToolChoice {
@@ -1090,6 +1097,7 @@ export interface RerankerDescription {
   params?: { [key: string]: any };
 }
 
+// TODO: We should consider renaming this to AutocompleteOptions.
 export interface TabAutocompleteOptions {
   disable: boolean;
   maxPromptTokens: number;
@@ -1105,6 +1113,7 @@ export interface TabAutocompleteOptions {
   useCache: boolean;
   onlyMyCode: boolean;
   useRecentlyEdited: boolean;
+  useRecentlyOpened: boolean;
   disableInFiles?: string[];
   useImports?: boolean;
   showWhateverWeHaveAtXMs?: number;
@@ -1272,7 +1281,7 @@ export interface HighlightedCodePayload {
 }
 
 export interface AcceptOrRejectDiffPayload {
-  filepath: string;
+  filepath?: string;
   streamId?: string;
 }
 
@@ -1572,4 +1581,10 @@ export interface RuleWithSource {
   description?: string;
   ruleFile?: string;
   alwaysApply?: boolean;
+}
+
+export interface CompleteOnboardingPayload {
+  mode: OnboardingModes;
+  provider?: string;
+  apiKey?: string;
 }

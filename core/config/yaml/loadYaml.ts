@@ -97,7 +97,7 @@ async function loadConfigYaml(options: {
   for (const blockType of BLOCK_TYPES) {
     const localBlocks = await getAllDotContinueDefinitionFiles(
       ide,
-      { includeGlobal: true, includeWorkspace: true },
+      { includeGlobal: true, includeWorkspace: true, fileExtType: "yaml" },
       blockType,
     );
     allLocalBlocks.push(
@@ -117,10 +117,15 @@ async function loadConfigYaml(options: {
   //   `Loading config.yaml from ${JSON.stringify(packageIdentifier)} with root path ${rootPath}`,
   // );
 
-  let config =
-    overrideConfigYaml ??
+  const errors: ConfigValidationError[] = [];
+
+  let config: AssistantUnrolled | undefined;
+
+  if (overrideConfigYaml) {
+    config = overrideConfigYaml;
+  } else {
     // This is how we allow use of blocks locally
-    (await unrollAssistant(
+    const unrollResult = await unrollAssistant(
       packageIdentifier,
       new RegistryClient({
         accessToken: await controlPlaneClient.getAccessToken(),
@@ -129,6 +134,7 @@ async function loadConfigYaml(options: {
         rootPath,
       }),
       {
+        renderSecrets: true,
         currentUserSlug: "",
         onPremProxyUrl: null,
         orgScopeId,
@@ -137,19 +143,18 @@ async function loadConfigYaml(options: {
           controlPlaneClient,
           ide,
         ),
-        renderSecrets: true,
         injectBlocks: allLocalBlocks,
       },
-    ));
+    );
+    config = unrollResult.config;
+    if (unrollResult.errors) {
+      errors.push(...unrollResult.errors);
+    }
+  }
 
-  const errors = isAssistantUnrolledNonNullable(config)
-    ? validateConfigYaml(config)
-    : [
-        {
-          fatal: true,
-          message: "Assistant includes blocks that don't exist",
-        },
-      ];
+  if (config && isAssistantUnrolledNonNullable(config)) {
+    errors.push(...validateConfigYaml(config));
+  }
 
   if (errors?.some((error) => error.fatal)) {
     return {
@@ -212,7 +217,8 @@ async function configYamlToContinueConfig(options: {
       config: continueConfig,
       errors: [
         {
-          message: "Found missing blocks in config.yaml",
+          message:
+            "Failed to load config due to missing blocks, see which blocks are missing below",
           fatal: true,
         },
       ],

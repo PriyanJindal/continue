@@ -9,6 +9,7 @@ class Dragon {
   }
 
   subtract(number) {
+    this.result -= number;
     return this;
   }
 

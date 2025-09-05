@@ -1,0 +1,258 @@
+import { OpenAIInstrumentation } from "@arizeai/openinference-instrumentation-openai";
+import {
+  OpenInferenceSpanKind,
+  SemanticConventions,
+  SEMRESATTRS_PROJECT_NAME,
+} from "@arizeai/openinference-semantic-conventions";
+import opentelemetry, {
+  diag,
+  DiagConsoleLogger,
+  DiagLogLevel,
+  Span,
+  trace,
+} from "@opentelemetry/api";
+import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";
+import { registerInstrumentations } from "@opentelemetry/instrumentation";
+import { resourceFromAttributes } from "@opentelemetry/resources";
+import { BatchSpanProcessor } from "@opentelemetry/sdk-trace-base";
+import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
+import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
+import OpenAI from "openai";
+
+// Set up diagnostic logging (optional, but helpful for debugging)
+diag.setLogger(new DiagConsoleLogger(), DiagLogLevel.WARN);
+
+// Configuration
+const COLLECTOR_ENDPOINT = "http";
+const PROJECT_NAME = "continue";
+
+// Global variables for instrumentation state (using global namespace to prevent duplicate initialization)
+declare global {
+  var __continueInstrumentationInitialized: boolean | undefined;
+  var __continueInstrumentationProvider: NodeTracerProvider | undefined;
+}
+
+let isInstrumentationInitialized = globalThis.__continueInstrumentationInitialized || false;
+let provider: NodeTracerProvider | undefined = globalThis.__continueInstrumentationProvider;
+
+function isOpenTelemetryAlreadyConfigured(): boolean {
+  try {
+    const existingProvider = trace.getTracerProvider();
+    
+    // Check if we already have a real provider (not the default proxy)
+    const hasRealProvider = 
+      existingProvider &&
+      existingProvider.constructor.name !== "NoopTracerProvider" &&
+      existingProvider.constructor.name !== "ProxyTracerProvider";
+
+    console.log(
+      `OpenTelemetry provider check: ${existingProvider?.constructor?.name}, has real provider: ${!!hasRealProvider}`,
+    );
+    
+    return !!hasRealProvider;
+  } catch (error) {
+    console.warn("Could not check existing OpenTelemetry provider:", error);
+    return false;
+  }
+}
+
+function initializeInstrumentation() {
+  // Check global state to prevent duplicate initialization across module loads
+  if (isInstrumentationInitialized || globalThis.__continueInstrumentationInitialized) {
+    console.log("Continue instrumentation already initialized, skipping");
+    return;
+  }
+  
+  // Set global flag immediately to prevent race conditions
+  globalThis.__continueInstrumentationInitialized = true;
+  isInstrumentationInitialized = true;
+
+  try {
+    // Check if OpenTelemetry is already configured
+    if (isOpenTelemetryAlreadyConfigured()) {
+      console.log(
+        "OpenTelemetry already configured by another component, using existing setup",
+      );
+
+      // Just register OpenAI instrumentation with existing provider
+      try {
+        const instrumentation = new OpenAIInstrumentation();
+        instrumentation.manuallyInstrument(OpenAI);
+
+        registerInstrumentations({
+          instrumentations: [instrumentation],
+        });
+        console.log(
+          "OpenAI instrumentation registered with existing OpenTelemetry setup",
+        );
+      } catch (instrumentationError: any) {
+        console.warn(
+          "Failed to register OpenAI instrumentation:",
+          instrumentationError.message,
+        );
+      }
+
+      return;
+    }
+
+    // Only create and register our own provider if none exists
+    console.log(
+      "No existing OpenTelemetry configuration found, creating Continue provider",
+    );
+
+    provider = new NodeTracerProvider({
+      resource: resourceFromAttributes({
+        [ATTR_SERVICE_NAME]: PROJECT_NAME,
+        [SEMRESATTRS_PROJECT_NAME]: PROJECT_NAME,
+      }),
+      spanProcessors: [
+        new BatchSpanProcessor(
+          new OTLPTraceExporter({
+            url: `http://localhost:6006/v1/traces`,
+          }),
+        ),
+      ],
+    });
+    
+    // Store in global state
+    globalThis.__continueInstrumentationProvider = provider;
+
+    // Register the provider - this will register APIs and set the global tracer provider
+    provider.register();
+    console.log("Continue OpenTelemetry provider registered successfully");
+
+    // Register OpenAI instrumentation
+    const instrumentation = new OpenAIInstrumentation();
+    instrumentation.manuallyInstrument(OpenAI);
+
+    registerInstrumentations({
+      instrumentations: [instrumentation],
+    });
+    console.log("OpenAI instrumentation registered successfully");
+  } catch (error) {
+    // Log the error but don't throw to prevent breaking the extension
+    console.error(
+      "Failed to initialize Continue OpenTelemetry instrumentation:",
+      error,
+    );
+    console.error("Continue will function normally without instrumentation");
+  }
+}
+
+// Export a function to initialize instrumentation when needed
+export function initializeInstrumentationIfNeeded() {
+  if (!isInstrumentationInitialized) {
+    initializeInstrumentation();
+    
+    // Log initialization status
+    console.log("=== Continue Instrumentation Status ===");
+    console.log(`Initialized: ${isInstrumentationInitialized}`);
+    console.log(`Collector endpoint: ${COLLECTOR_ENDPOINT}`);
+    console.log(`Project name: ${PROJECT_NAME}`);
+    
+    // Test creating a tracer to make sure it works
+    try {
+      const testTracer = trace.getTracer("continue-test", "1.0.0");
+      testTracer.startActiveSpan("initialization-test", (span) => {
+        span.setAttributes({ "test.initialization": true });
+        span.setStatus({ code: 1 }); // OK
+        span.end();
+        console.log("✅ Continue instrumentation test span created successfully");
+      });
+    } catch (error) {
+      console.error("❌ Failed to create test span:", error);
+    }
+    
+    console.log("=== End Instrumentation Status ===");
+  }
+}
+
+// Get tracer - this will work regardless of when initialization happens
+function getTracer() {
+  // Ensure initialization happens before getting tracer
+  initializeInstrumentationIfNeeded();
+  return opentelemetry.trace.getTracer("continue-instrumentation", "1.0.0");
+}
+
+export function chat(message: string) {
+  return getTracer().startActiveSpan("chat", (span: Span) => {
+    try {
+      span.setAttributes({
+        [SemanticConventions.OPENINFERENCE_SPAN_KIND]:
+          OpenInferenceSpanKind.CHAIN,
+        [SemanticConventions.INPUT_VALUE]: message,
+      });
+      console.log("Continue instrumentation: chat span created");
+      span.setAttributes({
+        [SemanticConventions.OUTPUT_VALUE]: "test instrumentation",
+      });
+      span.end();
+      return "test instrumentation";
+    } catch (error) {
+      console.error("Error in chat instrumentation:", error);
+      span.recordException(error as Error);
+      span.end();
+      return "test instrumentation";
+    }
+  });
+}
+
+// NOTE: Test calls are now done on-demand via initializeInstrumentationIfNeeded()
+// instead of at module level to avoid duplicate OpenTelemetry registration
+
+// Utility function to check if instrumentation is working
+export function checkInstrumentationStatus() {
+  const status = {
+    initialized: isInstrumentationInitialized,
+    tracerAvailable: !!getTracer(),
+    providerRegistered: !!provider,
+    hasActiveProvider: false,
+    activeProviderType: "unknown",
+  };
+
+  try {
+    const activeProvider = trace.getTracerProvider();
+    status.hasActiveProvider = !!activeProvider;
+    status.activeProviderType = activeProvider?.constructor?.name || "unknown";
+  } catch (error) {
+    console.warn("Could not check active tracer provider:", error);
+  }
+
+  return status;
+}
+
+// Export for debugging purposes
+export function getInstrumentationInfo() {
+  return {
+    status: checkInstrumentationStatus(),
+    collectorEndpoint: COLLECTOR_ENDPOINT,
+    projectName: PROJECT_NAME,
+  };
+}
+
+// Test function to verify spans are being created
+export function testInstrumentation() {
+  console.log("Testing Continue instrumentation...");
+
+  try {
+    const result = chat("Test message for instrumentation verification");
+    console.log("Instrumentation test completed:", result);
+
+    // Test tool instrumentation as well  
+    const toolTracer = trace.getTracer("continue-tools", "1.0.0");
+    toolTracer.startActiveSpan("test-span", (span) => {
+      span.setAttributes({ "test.attribute": "test-value" });
+      span.setStatus({ code: 1 }); // OK
+      span.end();
+      console.log("Tool tracer test span created successfully");
+    });
+
+    console.log("Instrumentation status:", checkInstrumentationStatus());
+    return true;
+  } catch (error) {
+    console.error("Instrumentation test failed:", error);
+    return false;
+  }
+}
+
+export { provider };

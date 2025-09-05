@@ -1,4 +1,4 @@
-class Calculator {
+class Dragon {
   constructor() {
     this.result = 0;
   }
@@ -7,6 +7,7 @@ class Calculator {
     this.result += number;
     return this;
   }
+
   subtract(number) {
     return this;
   }

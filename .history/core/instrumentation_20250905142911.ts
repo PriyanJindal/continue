@@ -15,9 +15,9 @@ diag.setLogger(new DiagConsoleLogger(), DiagLogLevel.DEBUG);
 
 const tracerProvider = new NodeTracerProvider({
   resource: resourceFromAttributes({
-    [ATTR_SERVICE_NAME]: "continue-dev-tracing",
+    [ATTR_SERVICE_NAME]: "openai-service",
     // Project name in Phoenix, defaults to "default"
-    [SEMRESATTRS_PROJECT_NAME]: "continue-dev-tracing",
+    [SEMRESATTRS_PROJECT_NAME]: "openai-service",
   }),
   spanProcessors: [
     // BatchSpanProcessor will flush spans in batches after some time,
